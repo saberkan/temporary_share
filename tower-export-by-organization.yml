@@ -1,0 +1,167 @@
+---
+- name: Export Tower objects belonging to a specific organization and import into Controller
+  hosts: localhost
+  connection: local
+  gather_facts: False
+  vars:
+    json_path: artifacts/export_results.json
+    find_org: Default
+  environment:
+    TOWER_HOST: "{{ groups['tower_controller'][0] }}"
+    TOWER_USERNAME: admin
+    TOWER_PASSWORD: "{{ generic_password }}"
+    TOWER_VERIFY_SSL: False
+    CONTROLLER_HOST: "{{ groups['aap_controller'][0] }}"
+    CONTROLLER_USERNAME: admin
+    CONTROLLER_PASSWORD: "{{ generic_password }}"
+    CONTROLLER_VERIFY_SSL: False
+  tasks:
+    # Available dicts
+    # ---------------
+    # X organizations # probably shouldn't touch, these are coming from SAML
+    # - credential_types # these don't belong to any specific organization
+    # X credentials
+    # X projects
+    # X inventory
+    # - inventory_sources
+    # X notification_templates
+    # X job_templates
+    # X workflow_job_templates
+    # - teams # shouldn't touch, these are coming from SAML
+    # - users # shouldn't touch, these are coming from SAML
+
+    # jq versions
+    # cat results.json | jq '.["organizations"] | .[] | select(.name=="F5")'
+    # cat results.json | jq '.["projects"] | .[] | select(.organization.name=="F5")'
+
+    - tags:
+        - select
+        - import
+      block:
+        - name: Stat existing export file
+          ansible.builtin.stat:
+            path: "{{ json_path }}"
+          register: st
+
+        - when: st.stat.exists == False
+          block:
+            - name: Export all tower assets
+              ansible.tower.tower_export:
+                all: True
+              register: export_results
+
+            - name: Write result to export file
+              ansible.builtin.copy:
+                content: "{{ export_results.assets }}"
+                dest: "{{ json_path }}"
+
+            - ansible.builtin.set_fact:
+                objects: "{{ export_results.assets }}"
+
+        - when: st.stat.exists == True
+          block:
+            - name: Import existing export file
+              ansible.builtin.set_fact:
+                objects: "{{ lookup('file', json_path) | from_json() }}"
+
+        - ansible.builtin.debug:
+            var: objects
+            verbosity: 4
+
+        - name: Select organizations
+          vars:
+            search_string: "[?name=='{{ find_org }}']"
+          ansible.builtin.set_fact:
+            organizations: "{{ objects.organizations | community.general.json_query(search_string) }}"
+
+        - name: Select credentials
+          vars:
+            search_string: "[?organization.name=='{{ find_org }}']"
+          ansible.builtin.set_fact:
+            credentials: "{{ objects.credentials | community.general.json_query(search_string) }}"
+
+        - name: Select projects
+          vars:
+            search_string: "[?organization.name=='{{ find_org }}']"
+          ansible.builtin.set_fact:
+            projects: "{{ objects.projects | community.general.json_query(search_string) }}"
+
+        - name: Select inventories
+          vars:
+            search_string: "[?organization.name=='{{ find_org }}']"
+          ansible.builtin.set_fact:
+            inventory: "{{ objects.inventory | community.general.json_query(search_string) }}"
+
+        - name: Select notification templates
+          vars:
+            search_string: "[?organization.name=='{{ find_org }}']"
+          ansible.builtin.set_fact:
+            notification_templates: "{{ objects.notification_templates | community.general.json_query(search_string) }}"
+
+        - name: Select job templates
+          vars:
+            search_string: "[?natural_key.organization.name=='{{ find_org }}']"
+          ansible.builtin.set_fact:
+            job_templates: "{{ objects.job_templates | community.general.json_query(search_string) }}"
+
+        - name: Select workflow job templates
+          vars:
+            search_string: "[?natural_key.organization.name=='{{ find_org }}']"
+          ansible.builtin.set_fact:
+            workflow_job_templates: "{{ objects.workflow_job_templates | community.general.json_query(search_string) }}"
+
+    - tags:
+        - never
+        - import
+      block:
+        - name: Import organizations into Controller
+          vars:
+            _wrapper:
+              organizations: "{{ organizations }}"
+          ansible.controller.import:
+            assets: "{{ _wrapper }}"
+
+        # Credential values must be updated manually
+        - name: Import credentials into Controller
+          vars:
+            _wrapper:
+              credentials: "{{ credentials }}"
+          ansible.controller.import:
+            assets: "{{ _wrapper }}"
+
+        - name: Import projects into Controller
+          vars:
+            _wrapper:
+              projects: "{{ projects }}"
+          ansible.controller.import:
+            assets: "{{ _wrapper }}"
+
+        - name: Import inventories into Controller
+          vars:
+            _wrapper:
+              inventory: "{{ inventory }}"
+          ansible.controller.import:
+            assets: "{{ _wrapper }}"
+
+        - name: Import notification templates into Controller
+          vars:
+            _wrapper:
+              notification_templates: "{{ notification_templates }}"
+          ansible.controller.import:
+            assets: "{{ _wrapper }}"
+
+        # Projects must be synced first
+        - name: Import job templates into Controller
+          vars:
+            _wrapper:
+              job_templates: "{{ job_templates }}"
+          ansible.controller.import:
+            assets: "{{ _wrapper }}"
+
+        - name: Import workflow job templates into Controller
+          vars:
+            _wrapper:
+              workflow_job_templates: "{{ workflow_job_templates }}"
+          ansible.controller.import:
+            assets: "{{ _wrapper }}"
+...
